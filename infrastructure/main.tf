@@ -9,6 +9,22 @@ resource "random_string" "random_suffix" {
   upper   = false
 }
 
+# Create the secret in AWS Secrets Manager
+resource "aws_secretsmanager_secret" "jira_credentials" {
+  name = "jira-secret-credentials-${random_string.random_suffix.result}"
+}
+
+# Create the secret version with placeholder values
+resource "aws_secretsmanager_secret_version" "jira_credentials" {
+  secret_id     = aws_secretsmanager_secret.jira_credentials.id
+  secret_string = jsonencode({
+    api_key   = "your-jira-api-key-here",
+    email     = "your-jira-email@example.com",
+    base_url  = "https://your-jira-instance.atlassian.net"
+  })
+}
+
+
 # Create S3 bucket with unique name
 resource "aws_s3_bucket" "bucket" {
   bucket = "jira-tickets-${random_string.random_suffix.result}"
@@ -27,6 +43,17 @@ resource "aws_s3_bucket_versioning" "bucket_versioning" {
   }
 }
 
+# Install dependencies in Lambda function
+resource "null_resource" "install_lambda_dependencies_fetch_jira_issues" {
+  provisioner "local-exec" {
+    command = "pip install -r ${path.module}/../src/lambda/fetch-jira-issues/requirements.txt -t ${path.module}/../src/lambda/fetch-jira-issues/"
+  }
+
+  triggers = {
+    dependencies_versions = filemd5("${path.module}/../src/lambda/fetch-jira-issues/requirements.txt")
+  }
+}
+
 # Archive Lambda function (zip the source files) for start-glue-job
 data "archive_file" "lambda_package_start_glue" {
   type        = "zip"
@@ -39,6 +66,14 @@ data "archive_file" "lambda_package_classify_tickets" {
   type        = "zip"
   source_dir  = "${path.module}/../src/lambda/classify-tickets"
   output_path = "${path.module}/lambda_function_classify_tickets_payload.zip"
+}
+
+data "archive_file" "lambda_package_fetch_jira_issues" {
+  type        = "zip"
+  source_dir  = "${path.module}/../src/lambda/fetch-jira-issues"
+  output_path = "${path.module}/lambda_function_fetch_jira_issues_payload.zip"
+  depends_on  = [null_resource.install_lambda_dependencies_fetch_jira_issues]
+
 }
 
 # Upload Glue ETL script to S3 (no zip)
@@ -239,6 +274,108 @@ resource "aws_s3_bucket_notification" "bucket_notification" {
   ]
 }
 
+# Create IAM Role for fetch-jira-issues Lambda
+resource "aws_iam_role" "lambda_role_fetch_jira_issues" {
+  name = "lambda_execution_role_fetch_jira_issues_${random_string.random_suffix.result}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+# Attach IAM policy to allow fetch-jira-issues Lambda to access S3, CloudWatch logs, and Secrets Manager
+# Update the IAM policy for fetch-jira-issues Lambda
+resource "aws_iam_role_policy" "lambda_policy_fetch_jira_issues" {
+  role = aws_iam_role.lambda_role_fetch_jira_issues.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          "${aws_s3_bucket.bucket.arn}",
+          "${aws_s3_bucket.bucket.arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = aws_secretsmanager_secret.jira_credentials.arn
+      }
+    ]
+  })
+}
+
+# Lambda function resource for fetch-jira-issues
+resource "aws_lambda_function" "fetch_jira_issues_lambda" {
+  function_name    = "fetch-jira-issues-lambda-${random_string.random_suffix.result}"
+  filename         = data.archive_file.lambda_package_fetch_jira_issues.output_path
+  handler          = "main.lambda_handler"
+  runtime          = "python3.12"
+  role             = aws_iam_role.lambda_role_fetch_jira_issues.arn
+  source_code_hash = data.archive_file.lambda_package_fetch_jira_issues.output_base64sha256
+
+  environment {
+    variables = {
+      LOG_LEVEL                     = "DEBUG"
+      BUCKET_NAME                   = aws_s3_bucket.bucket.id
+      JIRA_CREDENTIALS_SECRET       = aws_secretsmanager_secret.jira_credentials.name
+      S3_PREFIX                     = "unprocessed"
+      PROJECT_IDS_COMMA_SEPARATED   = "TannerTest"
+    }
+  }
+
+  timeout     = 300
+  memory_size = 256
+}
+
+# CloudWatch Events Rule
+resource "aws_cloudwatch_event_rule" "daily_jira_fetch" {
+  name                = "daily-jira-fetch-${random_string.random_suffix.result}"
+  description         = "Triggers the Jira fetch Lambda function daily"
+  schedule_expression = "cron(0 1 * * ? *)"  # Runs at 1:00 AM UTC every day
+}
+
+# CloudWatch Events Target
+resource "aws_cloudwatch_event_target" "fetch_jira_issues_lambda_target" {
+  rule      = aws_cloudwatch_event_rule.daily_jira_fetch.name
+  target_id = "FetchJiraIssuesLambda"
+  arn       = aws_lambda_function.fetch_jira_issues_lambda.arn
+}
+
+# Lambda Permission for CloudWatch to invoke the function
+resource "aws_lambda_permission" "allow_cloudwatch_to_call_fetch_jira_issues" {
+  statement_id  = "AllowExecutionFromCloudWatch"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.fetch_jira_issues_lambda.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.daily_jira_fetch.arn
+}
+
+
 # IAM Role for Glue Job
 resource "aws_iam_role" "glue_service_role" {
   name = "glue-service-role-${random_string.random_suffix.result}"
@@ -321,4 +458,9 @@ output "classify_tickets_lambda_arn" {
 
 output "glue_job_name" {
   value = aws_glue_job.jira_etl_job.name
+}
+
+# Output the new Lambda function ARN
+output "fetch_jira_issues_lambda_arn" {
+  value = aws_lambda_function.fetch_jira_issues_lambda.arn
 }
