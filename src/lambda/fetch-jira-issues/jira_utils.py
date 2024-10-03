@@ -2,6 +2,7 @@ import json
 import requests
 from requests.auth import HTTPBasicAuth
 from typing import Dict, Any
+from datetime import datetime, timedelta
 
 jira_mappings = {
     "Id": ["id"],
@@ -45,7 +46,14 @@ def parse_json_with_map(json_data: Dict[str, Any], field_map: Dict[str, list]) -
 
 def fetch_jira_issues(base_url, project_id, email, api_key):
     url = f"{base_url}/rest/api/3/search"
-    jql = f"project = {project_id}"
+
+    # Calculate the date 8 days ago
+    eight_days_ago = (datetime.now() - timedelta(days=8)).strftime("%Y-%m-%d")
+    
+    # Create JQL
+    jql = f"project = {project_id} AND created >= '{eight_days_ago}' ORDER BY created DESC"
+
+    # Pass into params of request.
     params = {
         "jql": jql,
         "startAt": 0

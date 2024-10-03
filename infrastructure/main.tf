@@ -9,7 +9,264 @@ resource "random_string" "random_suffix" {
   upper   = false
 }
 
+
+#################################
+# IAM
+#################################
+
+# Create IAM Role for start-glue-job Lambda
+resource "aws_iam_role" "lambda_role_start_glue" {
+  name = "lambda_execution_role_start_glue_${random_string.random_suffix.result}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+# Attach IAM policy to allow Lambda to start Glue jobs and access S3 and CloudWatch logs
+resource "aws_iam_role_policy" "lambda_policy_start_glue" {
+  role = aws_iam_role.lambda_role_start_glue.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${aws_lambda_function.start_glue_job_lambda.function_name}:*"
+      },
+      {
+        Effect = "Allow"
+        Action = "logs:CreateLogGroup"
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+      },
+      {
+        Effect = "Allow"
+        Action = "s3:GetObject"
+        Resource = "${aws_s3_bucket.bucket.arn}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:StartJobRun",
+          "glue:GetJob",
+          "glue:GetJobRun"
+        ]
+        Resource = [
+          "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:job/${aws_glue_job.jira_etl_job.name}"
+        ]
+      }
+    ]
+  })
+}
+
+# Create IAM Role for classify-tickets Lambda
+resource "aws_iam_role" "lambda_role_classify_tickets" {
+  name = "lambda_execution_role_classify_tickets_${random_string.random_suffix.result}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+# Attach IAM policy to allow classify-tickets Lambda to access S3 and CloudWatch logs
+resource "aws_iam_role_policy" "lambda_policy_classify_tickets" {
+  role = aws_iam_role.lambda_role_classify_tickets.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${aws_lambda_function.classify_tickets_lambda.function_name}:*"
+      },
+      {
+        Effect = "Allow"
+        Action = "logs:CreateLogGroup"
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          "${aws_s3_bucket.bucket.arn}",
+          "${aws_s3_bucket.bucket.arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# Create IAM Role for fetch-jira-issues Lambda
+resource "aws_iam_role" "lambda_role_fetch_jira_issues" {
+  name = "lambda_execution_role_fetch_jira_issues_${random_string.random_suffix.result}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+# Attach IAM policy to allow fetch-jira-issues Lambda to access S3, CloudWatch logs, and Secrets Manager
+# Update the IAM policy for fetch-jira-issues Lambda
+resource "aws_iam_role_policy" "lambda_policy_fetch_jira_issues" {
+  role = aws_iam_role.lambda_role_fetch_jira_issues.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${aws_lambda_function.classify_tickets_lambda.function_name}:*"
+      },
+      {
+        Effect = "Allow"
+        Action = "logs:CreateLogGroup"
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          "${aws_s3_bucket.bucket.arn}",
+          "${aws_s3_bucket.bucket.arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = aws_secretsmanager_secret.jira_credentials.arn
+      }
+    ]
+  })
+}
+
+# IAM Role for Glue Job
+resource "aws_iam_role" "glue_service_role" {
+  name = "glue-service-role-${random_string.random_suffix.result}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = {
+        Service = "glue.amazonaws.com"
+      }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+# IAM Policy for Glue Job
+# IAM Policy for Glue Job
+resource "aws_iam_role_policy" "glue_policy" {
+  role = aws_iam_role.glue_service_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+        Resource = [
+          "${aws_s3_bucket.bucket.arn}/unprocessed/*",
+          "${aws_s3_bucket.bucket.arn}/staged/*",
+          "${aws_s3_bucket.bucket.arn}/scripts/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = "s3:ListBucket"
+        Resource = aws_s3_bucket.bucket.arn
+        Condition = {
+          StringLike = {
+            "s3:prefix": [
+              "unprocessed/*",
+              "staged/*",
+              "scripts/*"
+            ]
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws-glue/jobs/output:*"
+      },
+      {
+        Effect = "Allow"
+        Action = "logs:CreateLogGroup"
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+      }
+    ]
+  })
+}
+
+
+# Required data sources to get current region and account ID
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
+
+
+###################
+# Secrets Manager
+###################
+
 # Create the secret in AWS Secrets Manager
+#tfsec:ignore:aws-ssm-secret-use-customer-key
 resource "aws_secretsmanager_secret" "jira_credentials" {
   name = "jira-secret-credentials-${random_string.random_suffix.result}"
 }
@@ -24,8 +281,12 @@ resource "aws_secretsmanager_secret_version" "jira_credentials" {
   })
 }
 
+#################################
+# Simple Storage Service (S3)
+#################################
 
 # Create S3 bucket with unique name
+#tfsec:ignore:tfsec:ignore:aws-s3-enable-bucket-logging
 resource "aws_s3_bucket" "bucket" {
   bucket = "jira-tickets-${random_string.random_suffix.result}"
   
@@ -42,6 +303,32 @@ resource "aws_s3_bucket_versioning" "bucket_versioning" {
     status = "Enabled"
   }
 }
+
+# Add public access block to S3 bucket
+resource "aws_s3_bucket_public_access_block" "bucket_public_access_block" {
+  bucket = aws_s3_bucket.bucket.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Enable default encryption for S3 bucket
+#tfsec:ignore:aws-s3-encryption-customer-key
+resource "aws_s3_bucket_server_side_encryption_configuration" "bucket_encryption" {
+  bucket = aws_s3_bucket.bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+#################################
+# Lambda Resources Packaging
+#################################
 
 # Install dependencies in Lambda function
 resource "null_resource" "install_lambda_dependencies_fetch_jira_issues" {
@@ -76,70 +363,13 @@ data "archive_file" "lambda_package_fetch_jira_issues" {
 
 }
 
-# Upload Glue ETL script to S3 (no zip)
-resource "aws_s3_object" "etl_script_upload" {
-  bucket = aws_s3_bucket.bucket.id
-  key    = "scripts/etl_script.py"
-  source = "${path.module}/../src/glue/etl_script.py"
-}
 
-# Create IAM Role for start-glue-job Lambda
-resource "aws_iam_role" "lambda_role_start_glue" {
-  name = "lambda_execution_role_start_glue_${random_string.random_suffix.result}"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = {
-        Service = "lambda.amazonaws.com"
-      }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-# Attach IAM policy to allow Lambda to start Glue jobs and access S3 and CloudWatch logs
-resource "aws_iam_role_policy" "lambda_policy_start_glue" {
-  role = aws_iam_role.lambda_role_start_glue.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "arn:aws:logs:*:*:*"
-      },
-      {
-        Effect = "Allow"
-        Action = "s3:GetObject"
-        Resource = "${aws_s3_bucket.bucket.arn}/*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "glue:StartJobRun",
-          "glue:GetJob",
-          "glue:GetJobRun"
-        ]
-        Resource = [
-          "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:job/${aws_glue_job.jira_etl_job.name}"
-        ]
-      }
-    ]
-  })
-}
-
-# Required data sources to get current region and account ID
-data "aws_region" "current" {}
-data "aws_caller_identity" "current" {}
+#################################
+# Lambda
+#################################
 
 # Lambda function resource for start-glue-job
+#tfsec:ignore:aws-lambda-enable-tracing
 resource "aws_lambda_function" "start_glue_job_lambda" {
   function_name    = "start-glue-job-lambda-${random_string.random_suffix.result}"
   filename         = data.archive_file.lambda_package_start_glue.output_path
@@ -159,62 +389,8 @@ resource "aws_lambda_function" "start_glue_job_lambda" {
   memory_size = 128
 }
 
-# Create IAM Role for classify-tickets Lambda
-resource "aws_iam_role" "lambda_role_classify_tickets" {
-  name = "lambda_execution_role_classify_tickets_${random_string.random_suffix.result}"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = {
-        Service = "lambda.amazonaws.com"
-      }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-# Attach IAM policy to allow classify-tickets Lambda to access S3 and CloudWatch logs
-resource "aws_iam_role_policy" "lambda_policy_classify_tickets" {
-  role = aws_iam_role.lambda_role_classify_tickets.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "arn:aws:logs:*:*:*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          "${aws_s3_bucket.bucket.arn}",
-          "${aws_s3_bucket.bucket.arn}/*"
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "bedrock:InvokeModel"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
 # Lambda function resource for classify-tickets
+#tfsec:ignore:aws-lambda-enable-tracing
 resource "aws_lambda_function" "classify_tickets_lambda" {
   function_name    = "classify-tickets-lambda-${random_string.random_suffix.result}"
   filename         = data.archive_file.lambda_package_classify_tickets.output_path
@@ -252,84 +428,8 @@ resource "aws_lambda_permission" "allow_s3_invoke_classify_tickets" {
   source_arn    = aws_s3_bucket.bucket.arn
 }
 
-# S3 Bucket Notification for both Lambda functions
-resource "aws_s3_bucket_notification" "bucket_notification" {
-  bucket = aws_s3_bucket.bucket.id
-
-  lambda_function {
-    lambda_function_arn = aws_lambda_function.start_glue_job_lambda.arn
-    events              = ["s3:ObjectCreated:*"]
-    filter_prefix       = "unprocessed/"
-  }
-
-  lambda_function {
-    lambda_function_arn = aws_lambda_function.classify_tickets_lambda.arn
-    events              = ["s3:ObjectCreated:*"]
-    filter_prefix       = "staged/"
-  }
-
-  depends_on = [
-    aws_lambda_permission.allow_s3_invoke_start_glue,
-    aws_lambda_permission.allow_s3_invoke_classify_tickets
-  ]
-}
-
-# Create IAM Role for fetch-jira-issues Lambda
-resource "aws_iam_role" "lambda_role_fetch_jira_issues" {
-  name = "lambda_execution_role_fetch_jira_issues_${random_string.random_suffix.result}"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        Service = "lambda.amazonaws.com"
-      }
-      Action = "sts:AssumeRole"
-    }]
-  })
-}
-
-# Attach IAM policy to allow fetch-jira-issues Lambda to access S3, CloudWatch logs, and Secrets Manager
-# Update the IAM policy for fetch-jira-issues Lambda
-resource "aws_iam_role_policy" "lambda_policy_fetch_jira_issues" {
-  role = aws_iam_role.lambda_role_fetch_jira_issues.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "arn:aws:logs:*:*:*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:PutObject",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          "${aws_s3_bucket.bucket.arn}",
-          "${aws_s3_bucket.bucket.arn}/*"
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue"
-        ]
-        Resource = aws_secretsmanager_secret.jira_credentials.arn
-      }
-    ]
-  })
-}
-
 # Lambda function resource for fetch-jira-issues
+#tfsec:ignore:aws-lambda-enable-tracing
 resource "aws_lambda_function" "fetch_jira_issues_lambda" {
   function_name    = "fetch-jira-issues-lambda-${random_string.random_suffix.result}"
   filename         = data.archive_file.lambda_package_fetch_jira_issues.output_path
@@ -350,6 +450,32 @@ resource "aws_lambda_function" "fetch_jira_issues_lambda" {
 
   timeout     = 300
   memory_size = 256
+}
+
+#################################
+# Lambda Event Triggers
+#################################
+
+# S3 Bucket Notification for both Lambda functions
+resource "aws_s3_bucket_notification" "bucket_notification" {
+  bucket = aws_s3_bucket.bucket.id
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.start_glue_job_lambda.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "unprocessed/"
+  }
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.classify_tickets_lambda.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "staged/"
+  }
+
+  depends_on = [
+    aws_lambda_permission.allow_s3_invoke_start_glue,
+    aws_lambda_permission.allow_s3_invoke_classify_tickets
+  ]
 }
 
 # CloudWatch Events Rule
@@ -376,48 +502,18 @@ resource "aws_lambda_permission" "allow_cloudwatch_to_call_fetch_jira_issues" {
 }
 
 
-# IAM Role for Glue Job
-resource "aws_iam_role" "glue_service_role" {
-  name = "glue-service-role-${random_string.random_suffix.result}"
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = {
-        Service = "glue.amazonaws.com"
-      }
-      Action    = "sts:AssumeRole"
-    }]
-  })
+#################################
+# AWS Glue
+#################################
+
+# Upload Glue ETL script to S3 (no zip)
+resource "aws_s3_object" "etl_script_upload" {
+  bucket = aws_s3_bucket.bucket.id
+  key    = "scripts/etl_script.py"
+  source = "${path.module}/../src/glue/etl_script.py"
 }
 
-# IAM Policy for Glue Job
-resource "aws_iam_role_policy" "glue_policy" {
-  role = aws_iam_role.glue_service_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket",
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = [
-          "${aws_s3_bucket.bucket.arn}",
-          "${aws_s3_bucket.bucket.arn}/*",
-          "arn:aws:logs:*:*:*"
-        ]
-      }
-    ]
-  })
-}
 
 # Glue ETL Job resource
 resource "aws_glue_job" "jira_etl_job" {
@@ -442,6 +538,11 @@ resource "aws_glue_job" "jira_etl_job" {
     Name = "JiraETLJob"
   }
 }
+
+
+#################################
+# Outputs
+#################################
 
 # Outputs
 output "s3_bucket_name" {

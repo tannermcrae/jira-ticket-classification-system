@@ -30,6 +30,7 @@ Jira Ticket Classification is an automated system designed to classify Jira tick
 - **Amazon Bedrock**: Provides the AI model for ticket classification.
 - **AWS Glue**: Manages data deduplication.
 - **S3**: Stores Jira exports and classification results.
+- **Secrets Manager**: Stores our Jira API key, base url, and email address for pulling Jira tickets.
 
 ## Setup and Configuration
 
@@ -39,14 +40,30 @@ Jira Ticket Classification is an automated system designed to classify Jira tick
 
 To set up the project:
 
-1. Navigate to the `infrastructure` folder in the project.
-2. Run `terraform init` to initialize the Terraform working directory.
-3. Run `terraform apply` to create the resources in your AWS environment.
+1. Update main.tf fetch_jira_issue_lambda's environment variable PROJECT_IDS_COMMA_SEPARATED to include the projectIds you want to pull
+2. Navigate to the `infrastructure` folder in the project.
+3. Run `terraform init` to initialize the Terraform working directory.
+4. Run `terraform apply` to create the resources in your AWS environment.
+5. Go to secrets manager and update the Jira secret with your Jira configuration
 
 To tear down the project:
 
 1. Navigate to the `infrastructure` folder.
 2. Run `terraform destroy` to remove all resources created by this project.
+
+## Security
+Make sure to run tfsec on the infrastruction folder any time you make an additional change to the code. These security warnings have been suppressed because they don't make sense for the project. Before suppressing any warnings, ensure it is the right thing to do. 
+
+Run TFSec
+```bash
+$ tfsec .
+```
+
+**Suppressed Warnings**
+1. Secrets Manager "aws-ssm-secret-use-customer-key": This warning requires us to use a KMS key for our secret.
+2. S3 "aws-s3-enable-bucket-logging": Remove and turn on if bucket logging makes sense for your use case
+3. S3 Bucket Encyption "aws_s3_bucket_server_side_encryption_configuration": We are using an AWS managed encryption key
+4. Lambda "aws-lambda-enable-tracing": Turn on tracing if this makes sense for your project.
 
 ## Usage
 
